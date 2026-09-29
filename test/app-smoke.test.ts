@@ -876,6 +876,134 @@ console.log('  ✓ 冲突审阅面板（含忽略折叠与交叠高亮）渲染�
   cs3.remove()
 }
 
+// 回归（U+0001 标签）：旧版把单标签「甲乙」与两个标签「甲」「乙」当作同一内容。
+// 加载旧存档时：快照已审记录与抽样复核结论都应回到未审 / 待复核；
+// 随后把标签真正拆成两个标签，快照必须显示标签差异，结论仍为失效。
+{
+  const SOX = ''
+  const regText = '零一二三四五六七八九'
+  // 旧实现下两种标签形态碰撞出的签名（由旧序列化直接计算得出）
+  const collisionSampleSig = '10ehoxy3mwj92'
+  const collisionDiffSig = '1infqg5cynb1i'
+  const oldDoc = {
+    title: '分隔符回归文档',
+    text: regText,
+    updatedAt: Date.now(),
+    annotations: [
+      {
+        id: 'rg_a',
+        quote: '零一',
+        start: 0,
+        end: 2,
+        note: '',
+        tags: ['甲' + SOX + '乙'],
+        status: 'bound',
+        createdAt: 1,
+        updatedAt: 1,
+        contextBefore: '',
+        contextAfter: '',
+      },
+    ],
+    baseline: {
+      createdAt: 1,
+      annotations: [
+        { id: 'rg_a', status: 'bound', quote: '零一', note: '', tags: ['甲' + SOX + '乙'], start: 0, end: 2 },
+      ],
+    },
+    reviewedDiffs: [
+      // 旧版针对「单标签 → 拆成两个标签」这一差异留下的已审记录（实际漏报场景下未必存在；
+      // 这里显式塞入，验证含分隔符的旧碰撞签名在加载后不再被信任：若记录存活则说明仍漏报）
+      { annotationId: 'rg_a', signature: collisionDiffSig, createdAt: 1 },
+    ],
+    sampleConfig: {
+      seed: '回归种子',
+      // 拆前命中含分隔符的原标签，拆后命中甲 / 乙：两种形态下标注都在队列中
+      targets: [
+        { tag: '甲' + SOX + '乙', count: 1 },
+        { tag: '甲', count: 1 },
+        { tag: '乙', count: 1 },
+      ],
+      createdAt: 1,
+      updatedAt: 1,
+    },
+    sampleReviews: [
+      {
+        annotationId: 'rg_a',
+        signature: collisionSampleSig,
+        verdict: 'pass',
+        note: '旧版复核通过',
+        createdAt: 1,
+        updatedAt: 1,
+      },
+    ],
+  }
+  localStorage.setItem('anchor-annotation-console:v1', JSON.stringify(oldDoc))
+  const rg = document.createElement('div')
+  rg.id = 'rootreg'
+  document.body.appendChild(rg)
+  const rgr = createRoot(rg)
+
+  await new Promise<void>((resolve) => {
+    rgr.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 400)
+  })
+  const wait = () => new Promise<void>((resolve) => setTimeout(resolve, 150))
+  const saved = () => JSON.parse(localStorage.getItem('anchor-annotation-console:v1')!)
+
+  // 加载后：标签含 U+0001 时旧签名不再命中 → 抽样结论被清理（回到待复核）
+  assert.deepStrictEqual(
+    saved().sampleReviews,
+    [],
+    '含分隔符标签的旧碰撞复核结论应在加载时失效',
+  )
+  // 抽样卡片显示「通过」按钮（即待复核），而不是已通过状态
+  const sampleCard = rg.querySelector('.sample-item')
+  assert.ok(sampleCard, '标注仍应在抽样队列中')
+  assert.ok(sampleCard!.textContent?.includes('通过'), '抽中项应回到待复核，可重新标记通过')
+
+  // 标签在界面上以可见符号 ␁ 展示
+  assert.ok(rg.innerHTML.includes('#甲␁乙'), '含 U+0001 的标签应以 ␁ 可见展示')
+
+  // 基线与当前一致时没有快照差异（已审记录虽被清理，但也无差异项可审，属正常）
+  // 现在模拟用户把单标签拆成两个标签后保存
+  {
+    const d = saved()
+    d.annotations[0].tags = ['甲', '乙']
+    d.updatedAt = Date.now()
+    localStorage.setItem('anchor-annotation-console:v1', JSON.stringify(d))
+  }
+  rgr.unmount()
+  const rg2 = document.createElement('div')
+  rg2.id = 'rootreg2'
+  document.body.appendChild(rg2)
+  const rgr2 = createRoot(rg2)
+  await new Promise<void>((resolve) => {
+    rgr2.render(React.createElement(React.StrictMode, null, React.createElement(App)))
+    setTimeout(resolve, 400)
+  })
+
+  // 快照必须报出标签修改，并展示前后值（旧版此处漏报）
+  const modCard = rg2.querySelector('.snap-item.snap-modified')
+  assert.ok(modCard, '拆分标签后应出现修改差异卡片')
+  assert.ok(modCard!.textContent?.includes('标签'), '差异卡片应包含标签字段')
+  assert.ok(modCard!.textContent?.includes('#甲␁乙'), '应展示基线侧的旧标签')
+  assert.ok(modCard!.textContent?.includes('#甲') && modCard!.textContent?.includes('#乙'), '应展示拆分后的两个标签')
+  assert.ok(
+    [...modCard!.querySelectorAll('button')].some((b) =>
+      b.textContent?.trim() === '标记已审',
+    ),
+    '差异应处于未审状态（旧已审结论不再有效）',
+  )
+  // 复核结论依然失效：抽样卡片仍待复核
+  assert.deepStrictEqual(saved().sampleReviews, [], '拆分标签后旧复核结论仍应失效')
+  assert.ok(rg2.querySelector('.sample-item')?.textContent?.includes('通过'), '抽中项保持待复核')
+
+  rgr2.unmount()
+  rg.remove()
+  rg2.remove()
+  console.log('  ✓ 回归：U+0001 标签拆分被快照与抽样复核识别，旧结论失效、标签差异可见')
+}
+
 // 训练集划分导出：百分比校验 → 连通分组 → 统计 → 三个 JSONL 分别下载 → 确定性 → 排除待处理
 {
   // jsdom 不实现 URL.createObjectURL；打桩以避免点击下载抛错

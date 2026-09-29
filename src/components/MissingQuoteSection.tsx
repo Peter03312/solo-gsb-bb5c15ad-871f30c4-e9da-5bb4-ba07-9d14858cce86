@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from 'react'
 import type { RefObject } from 'react'
 import type { Annotation } from '../types'
 import type { QuoteAudit, QuoteOccurrence } from '../lib/missingQuotes'
+import { tagDisplay } from '../lib/tags'
 
 interface Props {
   text: string
@@ -227,7 +228,7 @@ export function MissingQuoteSection(props: Props) {
                   <span className="mq-template-tags">
                     {template.tags.map((t) => (
                       <span className="ann-tag" key={t}>
-                        #{t}
+                        #{tagDisplay(t)}
                       </span>
                     ))}
                   </span>

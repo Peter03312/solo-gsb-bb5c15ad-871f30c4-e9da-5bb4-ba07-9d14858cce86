@@ -2,6 +2,7 @@ import { useId, useMemo, useState } from 'react'
 import { normalizeTag } from '../lib/conflicts'
 import { planTagRename, type TagRenamePlan } from '../lib/rename'
 import type { Annotation, ConflictRule, IgnoredConflict } from '../types'
+import { tagDisplay } from '../lib/tags'
 
 interface Props {
   annotations: Annotation[]
@@ -20,7 +21,7 @@ function TagList({ tags }: { tags: string[] }) {
     <>
       {tags.map((t, i) => (
         <span className="ann-tag" key={`${t}-${i}`}>
-          #{t}
+          #{tagDisplay(t)}
         </span>
       ))}
     </>
@@ -85,7 +86,7 @@ export function TagRenameEditor({
           <option value="">— 请选择要重命名的标签 —</option>
           {allTags.map((t) => (
             <option key={t} value={t}>
-              #{t}
+              #{tagDisplay(t)}
             </option>
           ))}
         </select>

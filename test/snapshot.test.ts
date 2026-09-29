@@ -275,4 +275,59 @@ check('空内容以前后值占位符展示', () => {
   assert.strictEqual(byField.note.before, '（空）')
 })
 
+// 18. 回归（U+0001 分隔符）：单标签「甲乙」拆成「甲」「乙」必须识别为标签差异
+check('单标签内含 U+0001 拆成两个标签视为标签修改', () => {
+  const before = ann(0, 4, ['甲乙'], 'a1')
+  const baseline = makeBaseline([before])
+  const after: Annotation = { ...before, tags: ['甲', '乙'] }
+  const diffs = diffSnapshot(baseline, [after])
+  assert.strictEqual(diffs.length, 1)
+  assert.strictEqual(diffs[0].kind, 'modified')
+  assert.deepStrictEqual(diffs[0].changes.map((c) => c.field), ['tags'])
+  const tagsChange = diffs[0].changes[0]
+  assert.strictEqual(tagsChange.before, '#甲␁乙')
+  assert.strictEqual(tagsChange.after, '#甲 #乙')
+})
+
+// 19. 回归（U+0001 分隔符）：拆分前后差异签名不同于旧实现的碰撞签名，
+//     旧的已审记录不再命中，差异回到未审
+check('拆分后差异签名改变，旧（碰撞）已审记录被清理', () => {
+  const before = ann(0, 2, ['甲乙'], 'a1', { quote: '零一' })
+  const baseline = makeBaseline([before])
+  const after: Annotation = { ...before, tags: ['甲', '乙'] }
+  const diffs = diffSnapshot(baseline, [after])
+  assert.strictEqual(diffs.length, 1)
+  // 旧实现把两侧标签都 join('')，此签名同时代表「单标签含分隔符」与「两个标签」
+  const oldCollisionSignature = '1infqg5cynb1i'
+  assert.notStrictEqual(diffs[0].signature, oldCollisionSignature)
+  const stale = { annotationId: 'a1', signature: oldCollisionSignature, createdAt: 1 }
+  assert.deepStrictEqual(pruneReviewedDiffs([stale], diffs), [])
+  // 新签名的已审记录命中
+  const fresh = { annotationId: 'a1', signature: diffs[0].signature, createdAt: 2 }
+  assert.deepStrictEqual(pruneReviewedDiffs([fresh], diffs), [fresh])
+})
+
+// 20. 回归（U+0001 分隔符）：内容未变（标签完全没动）时签名稳定，已有结论保留
+check('不含分隔符的标签改动签名照旧；含分隔符标签但内容未变不产生差异', () => {
+  // 普通标签：备注变化产生的签名与旧实现完全一致（见测试 9 的跨次构造稳定性）
+  const plain = ann(0, 2, ['甲', '乙'], 'a1', { quote: '零一', note: '旧' })
+  const baseline = makeBaseline([plain])
+  const edited: Annotation = { ...plain, note: '新' }
+  const d = diffSnapshot(baseline, [edited])
+  assert.strictEqual(d[0].signature, '1hj3zk96uj3nw')
+  // 单标签含 U+0001，但基线与当前逐字一致 → 无差异
+  const ctrl = ann(0, 2, ['甲乙'], 'a2', { quote: '零一' })
+  assert.deepStrictEqual(diffSnapshot(makeBaseline([ctrl]), [{ ...ctrl }]), [])
+})
+
+// 21. 反向合并：两个标签「甲」「乙」合并为单标签「甲乙」同样报差异
+check('两个标签合并为含 U+0001 的单标签视为标签修改', () => {
+  const before = ann(0, 4, ['甲', '乙'], 'a1')
+  const baseline = makeBaseline([before])
+  const after: Annotation = { ...before, tags: ['甲乙'] }
+  const diffs = diffSnapshot(baseline, [after])
+  assert.strictEqual(diffs.length, 1)
+  assert.deepStrictEqual(diffs[0].changes.map((c) => c.field), ['tags'])
+})
+
 console.log(`\nsnapshot：${passed} 项断言全部通过`)

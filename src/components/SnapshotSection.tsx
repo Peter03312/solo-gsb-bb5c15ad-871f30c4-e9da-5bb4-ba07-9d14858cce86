@@ -4,6 +4,7 @@ import type { Annotation, AnnotationBaseline } from '../types'
 import type { SnapshotDiffItem, SnapshotDiffKind } from '../lib/snapshot'
 import { DIFF_KIND_LABEL, rangeLabel } from '../lib/snapshot'
 import { badgeColor } from '../lib/segments'
+import { tagDisplay } from '../lib/tags'
 
 interface Props {
   baseline: AnnotationBaseline | null
@@ -99,7 +100,7 @@ function DiffCard({
             <span className="ann-tags snap-meta-tags">
               {meta.tags.map((t) => (
                 <span className="ann-tag" key={t}>
-                  #{t}
+                  #{tagDisplay(t)}
                 </span>
               ))}
             </span>

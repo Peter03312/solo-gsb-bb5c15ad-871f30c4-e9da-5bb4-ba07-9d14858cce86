@@ -371,4 +371,93 @@ check('导入后关联记录经既有清洗：忽略 / 关系 / 结论引用缺�
   assert.strictEqual(result.document.conflictRules[0].id, 'r1')
 })
 
+// ---------- U+0001 标签：往返保真与失效签名清理 ----------
+
+const SOX = ''
+
+check('含 U+0001 的标签随 JSON 往返（本地保存 / 导入导出）无损保留', () => {
+  const a = {
+    ...makePayload().annotations[0],
+    id: 'a_ctrl',
+    tags: ['甲' + SOX + '乙'],
+  }
+  const result1 = buildImportDocument(makePayload({ annotations: [a] }))
+  assert.ok(result1.ok)
+  if (!result1.ok) return
+  assert.deepStrictEqual(result1.document.annotations[0].tags, ['甲' + SOX + '乙'])
+  // 模拟本地保存（saveDocument 即 JSON.stringify）后重新加载
+  const reparsed = JSON.parse(JSON.stringify(result1.document))
+  const result2 = buildImportDocument(
+    {
+      format: 'anchor-annotation-console',
+      version: 1,
+      exportedAt: '2026-09-29T00:00:00.000Z',
+      document: { title: reparsed.title, text: reparsed.text, annotationCount: 1 },
+      annotations: [
+        {
+          id: 'a_ctrl',
+          status: 'bound',
+          quote: TEXT.slice(0, 2),
+          note: '',
+          tags: reparsed.annotations[0].tags,
+          position: { start: 0, end: 2 },
+          context: { before: '', after: '' },
+          pendingReason: null,
+          lastRelocation: null,
+          createdAt: '2026-09-20T00:00:00.000Z',
+          updatedAt: '2026-09-20T00:00:00.000Z',
+        },
+      ],
+    },
+  )
+  assert.ok(result2.ok)
+  if (!result2.ok) return
+  assert.deepStrictEqual(result2.document.annotations[0].tags, ['甲' + SOX + '乙'])
+})
+
+check('旧碰撞签名：含分隔符标签的旧复核结论导入时失效，普通标签结论保留', () => {
+  // 旧实现下「单标签 甲乙」与「两个标签 甲、乙」碰撞出同一签名
+  const collisionSig = '10ehoxy3mwj92'
+  const aCtrl = {
+    ...makePayload().annotations[0],
+    id: 'a_ctrl',
+    tags: ['甲' + SOX + '乙'],
+  }
+  const aPlain = {
+    ...makePayload().annotations[0],
+    id: 'a_plain',
+    tags: ['甲', '乙'],
+  }
+  const payload = makePayload({
+    annotations: [aCtrl, aPlain],
+    sampleReviews: [
+      // 引用含分隔符标注的旧碰撞结论 → 新签名不再命中，导入时剔除
+      {
+        annotationId: 'a_ctrl',
+        signature: collisionSig,
+        verdict: 'pass',
+        note: '旧结论',
+        createdAt: '2026-09-20T00:00:00.000Z',
+        updatedAt: '2026-09-20T00:00:00.000Z',
+      },
+      // 普通双标签：新签名逐字等于旧值 → 结论保留
+      {
+        annotationId: 'a_plain',
+        signature: collisionSig,
+        verdict: 'pass',
+        note: '仍有效',
+        createdAt: '2026-09-20T00:00:00.000Z',
+        updatedAt: '2026-09-20T00:00:00.000Z',
+      },
+    ],
+  })
+  const result = buildImportDocument(payload)
+  assert.ok(result.ok)
+  if (!result.ok) return
+  const reviews = result.document.sampleReviews
+  assert.strictEqual(reviews.length, 1)
+  assert.strictEqual(reviews[0].annotationId, 'a_plain')
+  assert.strictEqual(reviews[0].note, '仍有效')
+})
+
 console.log(`\n导入校验：${passed} 项断言全部通过`)

@@ -10,6 +10,7 @@ import type {
 import type { SampleQueueEntry, SampleQueueResult } from '../lib/sampling'
 import { annotationContentSignature, sampleReviewKey } from '../lib/sampling'
 import { badgeColor } from '../lib/segments'
+import { tagDisplay } from '../lib/tags'
 
 interface Props {
   config: SampleConfig | null
@@ -152,7 +153,7 @@ function SampleConfigForm({
           const over = value !== '' && Number.isFinite(n) && n > candidates
           return (
             <div className={`sample-tag-row ${over ? 'sample-tag-row-over' : ''}`} key={tag}>
-              <span className="sample-tag-name">#{tag}</span>
+              <span className="sample-tag-name">#{tagDisplay(tag)}</span>
               <input
                 className="rule-input sample-count-input"
                 type="number"
@@ -242,7 +243,7 @@ function SampleCard({
             className={`ann-tag ${entry.coveredTags.includes(t) ? 'sample-tag-filled' : ''}`}
             key={t}
           >
-            #{t}
+            #{tagDisplay(t)}
           </span>
         ))}
         <span className="sample-meta">

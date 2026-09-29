@@ -13,6 +13,7 @@ import {
   type SplitPercents,
 } from '../lib/datasetSplit'
 import { badgeColor } from '../lib/segments'
+import { tagDisplay } from '../lib/tags'
 
 interface Props {
   title: string
@@ -170,7 +171,7 @@ function GroupDetail({
                 <span className="split-group-tags">
                   {a.tags.map((t) => (
                     <span className="ann-tag" key={t}>
-                      #{t}
+                      #{tagDisplay(t)}
                     </span>
                   ))}
                 </span>

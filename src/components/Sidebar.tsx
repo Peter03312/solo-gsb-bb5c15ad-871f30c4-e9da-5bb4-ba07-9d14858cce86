@@ -24,6 +24,7 @@ import { DatasetSplitSection } from './DatasetSplitSection'
 import { BulkSection } from './BulkSection'
 import { MissingQuoteSection } from './MissingQuoteSection'
 import { RelationsSection } from './RelationsSection'
+import { tagDisplay } from '../lib/tags'
 
 interface Props {
   /** 文档标题（训练集划分导出的 JSONL 每行需要） */
@@ -152,7 +153,7 @@ function AnnotationItem({
         <div className="ann-tags">
           {a.tags.map((t) => (
             <span className="ann-tag" key={t}>
-              #{t}
+              #{tagDisplay(t)}
             </span>
           ))}
         </div>
@@ -219,7 +220,7 @@ function ConflictSide({
         <div className="ann-tags">
           {a.tags.map((t) => (
             <span className="ann-tag" key={t}>
-              #{t}
+              #{tagDisplay(t)}
             </span>
           ))}
         </div>
@@ -362,7 +363,7 @@ function CoverageCard({
                   <span className="cov-ann-tags">
                     {ca.tags.map((t) => (
                       <span className="ann-tag" key={t}>
-                        #{t}
+                        #{tagDisplay(t)}
                       </span>
                     ))}
                   </span>
@@ -445,7 +446,7 @@ function CoverageSection(
               onClick={() => toggle(t)}
               title={selected.includes(t) ? '点击移出覆盖标签集' : '点击加入覆盖标签集'}
             >
-              #{t}
+              #{tagDisplay(t)}
             </button>
           ))
         )}

@@ -1,4 +1,5 @@
 import { useId, useState } from 'react'
+import { tagDisplay } from '../lib/tags'
 
 interface Props {
   tags: string[]
@@ -26,7 +27,7 @@ export function TagEditor({ tags, onChange, suggestions, placeholder }: Props) {
       <div className="tag-chips">
         {tags.map((t) => (
           <span className="tag-chip" key={t}>
-            #{t}
+            #{tagDisplay(t)}
             <button
               type="button"
               className="tag-chip-x"

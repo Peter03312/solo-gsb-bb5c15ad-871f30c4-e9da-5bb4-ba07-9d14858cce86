@@ -237,6 +237,36 @@ check('标注内容签名：相同内容相同，任一内容字段变化即改�
   )
 })
 
+// 14b. 回归（U+0001 分隔符）：单标签「甲乙」拆成「甲」「乙」必须改变内容签名
+check('内容签名：单标签内含 U+0001 与拆成两个标签签名不同', () => {
+  const a = ann(['甲乙'], 'a1', { quote: '零一', start: 0, end: 2 })
+  const single = annotationContentSignature(a)
+  const split = annotationContentSignature({ ...a, tags: ['甲', '乙'] })
+  assert.notStrictEqual(single, split)
+  // 不含分隔符的普通标签签名与旧实现一致（旧 join('') 形态原样保留）
+  assert.strictEqual(split, '10ehoxy3mwj92')
+})
+
+// 14c. 回归（U+0001 分隔符）：拆分后旧结论失效（回到待复核）；内容未变结论保留
+check('拆分标签使旧复核结论失效，标签未变时结论仍有效', () => {
+  const a = ann(['甲', '乙'], 'a1', { quote: '零一', start: 0, end: 2 })
+  // 旧实现下「单标签含分隔符」与「两个标签」碰撞出的签名
+  const oldCollisionSig = '10ehoxy3mwj92'
+  const review: SampleReview = {
+    annotationId: 'a1',
+    signature: oldCollisionSig,
+    verdict: 'pass',
+    note: '旧结论',
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  // 若标注实际是单标签「甲乙」，旧碰撞签名在新实现下不再命中 → 失效
+  const singleTag: Annotation = { ...a, tags: ['甲乙'] }
+  assert.deepStrictEqual(pruneSampleReviews([review], [singleTag]), [])
+  // 普通双标签且内容未变 → 结论保留（签名逐字兼容旧实现）
+  assert.deepStrictEqual(pruneSampleReviews([review], [a]), [review])
+})
+
 // 15. pruneSampleReviews：删除 / pending / 内容变化 → 失效
 check('复核结论随标注删除、待处理化或内容变化自动失效', () => {
   const a = ann(['X'], 'a1', { quote: 'q', note: 'n' })

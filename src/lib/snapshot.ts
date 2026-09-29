@@ -17,6 +17,7 @@ import type {
   BaselineAnnotation,
   ReviewedDiff,
 } from '../types'
+import { serializeTags, tagDisplay } from './tags'
 
 /** 差异类型：新增 / 删除 / 修改 */
 export type SnapshotDiffKind = 'added' | 'removed' | 'modified'
@@ -95,7 +96,7 @@ function displayValue(s: string): string {
 }
 
 function tagsLabel(tags: string[]): string {
-  return tags.length > 0 ? tags.map((t) => `#${t}`).join(' ') : '（无标签）'
+  return tags.length > 0 ? tags.map((t) => `#${tagDisplay(t)}`).join(' ') : '（无标签）'
 }
 
 /** 逐字段对比基线快照与当前标注，返回全部变化字段的前后值 */
@@ -120,7 +121,9 @@ function fieldChanges(
       after: displayValue(cur.quote),
     })
   }
-  if (base.tags.join('\u0001') !== cur.tags.join('\u0001')) {
+  // 标签按词条边界与顺序比较：serializeTags 对含 U+0001 的标签内容同样无歧义，
+  // 单标签「甲\u0001乙」与两个标签「甲」「乙」不再被视为相同
+  if (serializeTags(base.tags) !== serializeTags(cur.tags)) {
     changes.push({
       field: 'tags',
       label: '标签',
@@ -141,7 +144,7 @@ function fieldChanges(
 
 /** 快照内容的稳定序列化（签名输入，含全部参与对比的字段） */
 function serializeSnapshot(s: BaselineAnnotation): string {
-  return [s.status, s.start, s.end, s.quote, s.tags.join('\u0001'), s.note].join('\u0000')
+  return [s.status, s.start, s.end, s.quote, serializeTags(s.tags), s.note].join('\u0000')
 }
 
 /** cyrb53：确定性的 53 位字符串散列（同一内容跨会话签名一致） */

@@ -10,6 +10,7 @@ import {
   type BulkTagPlan,
 } from '../lib/bulk'
 import { TagEditor } from './TagEditor'
+import { tagDisplay } from '../lib/tags'
 
 interface Props {
   annotations: Annotation[]
@@ -48,7 +49,7 @@ function TagFlow({ tags, added, removed }: { tags: string[]; added: Set<string>;
             : 'ann-tag'
         return (
           <span className={cls} key={`${t}-${i}`}>
-            #{t}
+            #{tagDisplay(t)}
           </span>
         )
       })}
@@ -271,7 +272,7 @@ export function BulkSection({ annotations, allTags, onFocus, onRebindStart, onAp
                           aria-pressed={filterTags.includes(t)}
                           onClick={() => toggleFilterTag(t)}
                         >
-                          #{t}
+                          #{tagDisplay(t)}
                         </button>
                       ))}
                     </div>
@@ -365,7 +366,7 @@ export function BulkSection({ annotations, allTags, onFocus, onRebindStart, onAp
                           <div className="bulk-item-tags">
                             {a.tags.map((t) => (
                               <span className="ann-tag" key={t}>
-                                #{t}
+                                #{tagDisplay(t)}
                               </span>
                             ))}
                           </div>
