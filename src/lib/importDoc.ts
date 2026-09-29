@@ -15,8 +15,17 @@
 import type { Annotation, DocumentData } from '../types'
 import { normalizeIgnored, normalizeRules, pruneIgnored } from './conflicts'
 import { normalizeCoverageTags } from './coverage'
-import { normalizeBaseline, normalizeReviewedDiffs, pruneReviewedDiffs, diffSnapshot } from './snapshot'
-import { normalizeSampleConfig, normalizeSampleReviews, pruneSampleReviews } from './sampling'
+import {
+  diffSnapshot,
+  migrateReviewedDiffs,
+  normalizeBaseline,
+  normalizeReviewedDiffs,
+} from './snapshot'
+import {
+  migrateSampleReviews,
+  normalizeSampleConfig,
+  normalizeSampleReviews,
+} from './sampling'
 import { normalizeCardinalityRules, normalizeRelations } from './relations'
 
 /** 一条不合格标注：index 为 annotations 数组中的序号（从 1 开始） */
@@ -215,13 +224,14 @@ export function buildImportDocument(
             : [],
         })
       : null
-  // 仅保留仍能命中导入后差异的已审记录
-  const reviewedDiffs = pruneReviewedDiffs(
+  // 迁移旧版（U+0001 标签拼接）已审签名后，仅保留仍能命中导入后差异的已审记录
+  const reviewedDiffs = migrateReviewedDiffs(
     normalizeReviewedDiffs(payload.reviewedDiffs),
     diffSnapshot(baseline, annotations),
   )
-  // 仅保留引用的标注仍存在、仍已绑定且内容签名一致的复核结论
-  const sampleReviews = pruneSampleReviews(
+  // 迁移旧版（U+0001 标签拼接）内容签名后，仅保留引用的标注仍存在、仍已绑定
+  // 且内容签名一致的复核结论
+  const sampleReviews = migrateSampleReviews(
     normalizeSampleReviews(payload.sampleReviews),
     annotations,
   )

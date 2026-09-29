@@ -3,6 +3,7 @@ import {
   diffSnapshot,
   diffSignature,
   makeBaseline,
+  migrateReviewedDiffs,
   normalizeBaseline,
   normalizeReviewedDiffs,
   pruneReviewedDiffs,
@@ -10,7 +11,9 @@ import {
   reviewedKey,
   snapshotAnnotation,
 } from '../src/lib/snapshot'
+import { serializeTags, tagsEqual } from '../src/lib/tags'
 import type { Annotation, BaselineAnnotation } from '../src/types'
+import { hash53, legacySerializeSnapshot } from './legacySig'
 
 let passed = 0
 function check(name: string, fn: () => void) {
@@ -273,6 +276,95 @@ check('空内容以前后值占位符展示', () => {
   const byField = Object.fromEntries(diffs[0].changes.map((c) => [c.field, c]))
   assert.strictEqual(byField.quote.before, '（空）')
   assert.strictEqual(byField.note.before, '（空）')
+})
+
+// 18. 回归：标签内容允许含 U+0001，单标签「甲\u0001乙」拆成「甲」「乙」必须识别为标签变化
+check('单标签含 U+0001 拆成两个标签时识别为修改并展示标签差异', () => {
+  const SOH = String.fromCharCode(1)
+  const before = ann(0, 4, [`甲${SOH}乙`], 'a1')
+  const baseline = makeBaseline([before])
+  const after: Annotation = { ...before, tags: ['甲', '乙'] }
+  const diffs = diffSnapshot(baseline, [after])
+  assert.strictEqual(diffs.length, 1)
+  assert.strictEqual(diffs[0].kind, 'modified')
+  assert.deepStrictEqual(diffs[0].changes.map((c) => c.field), ['tags'])
+  // 控制字符在展示中转义，两种标签形态肉眼可区分
+  assert.strictEqual(diffs[0].changes[0].before, '#甲\\u0001乙')
+  assert.strictEqual(diffs[0].changes[0].after, '#甲 #乙')
+})
+
+// 19. 回归：现行签名区分「单标签含 U+0001」与「两个标签」（旧版二者相同）
+check('现行差异签名区分含 U+0001 的单标签与两个标签', () => {
+  const SOH = String.fromCharCode(1)
+  const before = ann(0, 4, [`甲${SOH}乙`], 'a1')
+  const baseline = makeBaseline([before])
+  const split: Annotation = { ...before, tags: ['甲', '乙'] }
+  const splitSig = diffSnapshot(baseline, [split])[0].signature
+  // 旧版规则下两种形态签名相同（缺陷复现）
+  const unchangedLegacy = `M|${legacySerializeSnapshot(baseline.annotations[0])}|${legacySerializeSnapshot({ ...snapshotAnnotation(split), tags: [`甲${SOH}乙`] })}`
+  const splitLegacy = `M|${legacySerializeSnapshot(baseline.annotations[0])}|${legacySerializeSnapshot(snapshotAnnotation(split))}`
+  assert.strictEqual(hash53(unchangedLegacy), hash53(splitLegacy))
+  // 现行签名不再相等
+  const unchangedSig = diffSignature('modified', baseline.annotations[0], before)
+  assert.notStrictEqual(splitSig, unchangedSig)
+})
+
+// 20. tagsEqual / serializeTags 按边界与顺序识别
+check('标签比较与序列化按标签边界与顺序识别（标签可含 U+0001）', () => {
+  const SOH = String.fromCharCode(1)
+  assert.ok(tagsEqual(['甲', '乙'], ['甲', '乙']))
+  assert.ok(!tagsEqual([`甲${SOH}乙`], ['甲', '乙']))
+  assert.ok(!tagsEqual(['甲', '乙'], ['乙', '甲']))
+  assert.ok(!tagsEqual(['甲'], ['甲', '乙']))
+  assert.notStrictEqual(serializeTags([`甲${SOH}乙`]), serializeTags(['甲', '乙']))
+  assert.notStrictEqual(serializeTags(['甲', '乙']), serializeTags(['乙', '甲']))
+  assert.strictEqual(serializeTags(['甲', '乙']), serializeTags(['甲', '乙']))
+})
+
+// 21. 回归迁移：旧版已审记录，标签内容未变（不含 U+0001）→ 改写为现行签名，结论保留
+check('migrateReviewedDiffs 保留标签未变的旧版已审结论', () => {
+  const before = ann(0, 4, ['甲'], 'a1', { note: '旧' })
+  const baseline = makeBaseline([before])
+  const after: Annotation = { ...before, note: '新' }
+  const items = diffSnapshot(baseline, [after])
+  // 用旧版规则算出当时落库的签名
+  const legacySig = hash53(
+    `M|${legacySerializeSnapshot(baseline.annotations[0])}|${legacySerializeSnapshot(snapshotAnnotation(after))}`,
+  )
+  const old = { annotationId: 'a1', signature: legacySig, createdAt: 1 }
+  const out = migrateReviewedDiffs([old], items)
+  assert.strictEqual(out.length, 1)
+  assert.strictEqual(out[0].signature, items[0].signature)
+  assert.strictEqual(out[0].createdAt, 1)
+  // 幂等：再次迁移结果不变
+  assert.deepStrictEqual(migrateReviewedDiffs(out, items), out)
+})
+
+// 22. 回归迁移：旧版已审记录但标签确已拆分（含 U+0001）→ 不迁移，恢复未审
+check('migrateReviewedDiffs 对含 U+0001 的标签拆分差异恢复未审', () => {
+  const SOH = String.fromCharCode(1)
+  const before = ann(0, 4, [`甲${SOH}乙`], 'a1')
+  const baseline = makeBaseline([before])
+  const after: Annotation = { ...before, tags: ['甲', '乙'] }
+  const items = diffSnapshot(baseline, [after])
+  // 旧版下「拆分」不产生差异、也无签名；模拟的是更一般的情形：
+  // 旧版记录的签名等于按旧规则重算值，但标签含 U+0001，无法确认边界 → 丢弃
+  const legacySig = hash53(
+    `M|${legacySerializeSnapshot(baseline.annotations[0])}|${legacySerializeSnapshot(snapshotAnnotation(after))}`,
+  )
+  const old = { annotationId: 'a1', signature: legacySig, createdAt: 1 }
+  assert.deepStrictEqual(migrateReviewedDiffs([old], items), [])
+  // 现行签名的已审记录不受影响，正常保留
+  const current = { annotationId: 'a1', signature: items[0].signature, createdAt: 2 }
+  assert.deepStrictEqual(migrateReviewedDiffs([current], items), [current])
+})
+
+// 23. 迁移不复活已失效记录：标注已恢复成基线（无差异项）→ 旧记录被清理
+check('migrateReviewedDiffs 清理已无对应差异项的旧记录', () => {
+  const a = ann(0, 4, ['甲'], 'a1', { note: 'n' })
+  const baseline = makeBaseline([a])
+  const old = { annotationId: 'a1', signature: 'whatever', createdAt: 1 }
+  assert.deepStrictEqual(migrateReviewedDiffs([old], diffSnapshot(baseline, [a])), [])
 })
 
 console.log(`\nsnapshot：${passed} 项断言全部通过`)

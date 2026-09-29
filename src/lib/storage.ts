@@ -1,11 +1,21 @@
 import type { DocumentData } from '../types'
 import { normalizeIgnored, normalizeRules } from './conflicts'
 import { normalizeCoverageTags } from './coverage'
-import { normalizeBaseline, normalizeReviewedDiffs } from './snapshot'
-import { normalizeSampleConfig, normalizeSampleReviews, pruneSampleReviews } from './sampling'
+import {
+  diffSnapshot,
+  migrateReviewedDiffs,
+  normalizeBaseline,
+  normalizeReviewedDiffs,
+} from './snapshot'
+import {
+  migrateSampleReviews,
+  normalizeSampleConfig,
+  normalizeSampleReviews,
+} from './sampling'
 import { normalizeCardinalityRules, normalizeRelations } from './relations'
 
-const STORAGE_KEY = 'anchor-annotation-console:v1'
+/** localStorage 键（导出供测试直接写入旧版数据） */
+export const STORAGE_KEY = 'anchor-annotation-console:v1'
 
 export function loadDocument(): DocumentData | null {
   try {
@@ -15,6 +25,13 @@ export function loadDocument(): DocumentData | null {
     if (typeof data.text !== 'string' || !Array.isArray(data.annotations)) {
       return null
     }
+    // 旧版数据没有基线与已审记录：无损补空；旧版（U+0001 标签拼接）已审签名在此迁移
+    const baseline = normalizeBaseline(data.baseline)
+    const snapshotDiffs = diffSnapshot(baseline, data.annotations)
+    const reviewedDiffs = migrateReviewedDiffs(
+      normalizeReviewedDiffs(data.reviewedDiffs),
+      snapshotDiffs,
+    )
     return {
       title: typeof data.title === 'string' ? data.title : '未命名文档',
       text: data.text,
@@ -24,13 +41,13 @@ export function loadDocument(): DocumentData | null {
       ignoredConflicts: normalizeIgnored(data.ignoredConflicts),
       // 旧版本数据没有覆盖审计配置：无损补空
       coverageTags: normalizeCoverageTags(data.coverageTags),
-      // 旧版本数据没有基线与已审记录：无损补空
-      baseline: normalizeBaseline(data.baseline),
-      reviewedDiffs: normalizeReviewedDiffs(data.reviewedDiffs),
+      baseline,
+      reviewedDiffs,
       // 旧版本数据没有抽样复核配置：无损补空
       sampleConfig: normalizeSampleConfig(data.sampleConfig),
-      // 旧版本数据没有抽样复核结论：无损补空；加载时即剔除内容已变化的失效结论
-      sampleReviews: pruneSampleReviews(
+      // 旧版本数据没有抽样复核结论：无损补空；旧签名在此迁移，
+      // 并剔除内容已变化的失效结论
+      sampleReviews: migrateSampleReviews(
         normalizeSampleReviews(data.sampleReviews),
         data.annotations,
       ),

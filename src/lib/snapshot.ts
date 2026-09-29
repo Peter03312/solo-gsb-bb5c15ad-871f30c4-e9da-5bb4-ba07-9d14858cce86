@@ -9,6 +9,11 @@
 //   - 内容再次变化 → 签名改变，已审记录不再命中，该项重新出现为未审；
 //   - 恢复成基线 → 差异项消失，对应已审记录被清理；
 //   - 重建基线 → 全部已审记录清空（由调用方处理）。
+//
+// 标签允许包含 U+0001，因此标签比较不能用 U+0001 拼接字符串
+// （['甲\x01乙'] 与 ['甲', '乙'] 会拼成同一串），签名序列化同理。
+// 现行实现逐标签按边界与顺序比较，标签列表以 JSON 序列化进签名；
+// 旧版（U+0001 拼接）签名由 migrateReviewedDiffs 在加载 / 导入时一次性迁移。
 
 import type {
   Annotation,
@@ -17,6 +22,7 @@ import type {
   BaselineAnnotation,
   ReviewedDiff,
 } from '../types'
+import { serializeTags, tagsContainSeparator, tagsEqual } from './tags'
 
 /** 差异类型：新增 / 删除 / 修改 */
 export type SnapshotDiffKind = 'added' | 'removed' | 'modified'
@@ -94,8 +100,15 @@ function displayValue(s: string): string {
   return s === '' ? '（空）' : s
 }
 
+/** 标签展示用的控制字符转义（U+0000–U+001F），避免标签内分隔符在界面上不可见 */
+function escapeTagControl(t: string): string {
+  return t.replace(/[\x00-\x1f]/g, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`)
+}
+
 function tagsLabel(tags: string[]): string {
-  return tags.length > 0 ? tags.map((t) => `#${t}`).join(' ') : '（无标签）'
+  return tags.length > 0
+    ? tags.map((t) => `#${escapeTagControl(t)}`).join(' ')
+    : '（无标签）'
 }
 
 /** 逐字段对比基线快照与当前标注，返回全部变化字段的前后值 */
@@ -120,7 +133,7 @@ function fieldChanges(
       after: displayValue(cur.quote),
     })
   }
-  if (base.tags.join('\u0001') !== cur.tags.join('\u0001')) {
+  if (!tagsEqual(base.tags, cur.tags)) {
     changes.push({
       field: 'tags',
       label: '标签',
@@ -141,7 +154,27 @@ function fieldChanges(
 
 /** 快照内容的稳定序列化（签名输入，含全部参与对比的字段） */
 function serializeSnapshot(s: BaselineAnnotation): string {
+  return [s.status, s.start, s.end, s.quote, serializeTags(s.tags), s.note].join('\u0000')
+}
+
+/**
+ * 旧版序列化（仅迁移用）：标签以 U+0001 拼接。
+ * 标签内含 U+0001 时存在歧义（['甲\u0001乙']（标签内含一个 U+0001 字符）与 ['甲','乙']
+ * 的旧版拼接结果相同），故仅在两侧标签均不含 U+0001 时才可凭旧签名确认「内容未变」。
+ */
+function legacySerializeSnapshot(s: BaselineAnnotation): string {
   return [s.status, s.start, s.end, s.quote, s.tags.join('\u0001'), s.note].join('\u0000')
+}
+
+/** 按旧版规则重算差异签名（迁移核对用） */
+function legacyDiffSignature(item: SnapshotDiffItem): string {
+  const payload =
+    item.kind === 'added'
+      ? `A|${legacySerializeSnapshot(snapshotAnnotation(item.current!))}`
+      : item.kind === 'removed'
+        ? `R|${legacySerializeSnapshot(item.base!)}`
+        : `M|${legacySerializeSnapshot(item.base!)}|${legacySerializeSnapshot(snapshotAnnotation(item.current!))}`
+  return hash53(payload)
 }
 
 /** cyrb53：确定性的 53 位字符串散列（同一内容跨会话签名一致） */
@@ -262,6 +295,34 @@ export function pruneReviewedDiffs(
 ): ReviewedDiff[] {
   const valid = new Set(items.map((i) => i.key))
   return reviewed.filter((r) => valid.has(reviewedKey(r.annotationId, r.signature)))
+}
+
+/**
+ * 旧版已审记录迁移：旧签名把标签用 U+0001 拼接，标签内含 U+0001 时会漏判标签变化。
+ * 对每条已审记录，按其标注 ID 找到当前差异项并用旧版规则重算旧签名：
+ *   - 记录签名与重算的旧签名一致、且差异两侧标签均不含 U+0001（无歧义）
+ *     → 内容确未变化，把签名改写为现行签名，已审结论保留；
+ *   - 差异两侧任一标签含 U+0001（旧签名无法区分「单标签含 U+0001」与「多个标签」）
+ *     或签名对不上 → 原样保留，交由 pruneReviewedDiffs 清理，该项恢复未审。
+ * 因此「不含 U+0001 的已审记录」一律平滑保留；缺陷所涉的含分隔符数据重新送审。
+ * 已是现行签名的记录直接通过最后的 prune 保留。幂等：再次调用结果不变。
+ */
+export function migrateReviewedDiffs(
+  reviewed: ReviewedDiff[],
+  items: SnapshotDiffItem[],
+): ReviewedDiff[] {
+  const byAnnotationId = new Map(items.map((i) => [i.annotationId, i]))
+  const migrated = reviewed.map((r) => {
+    const item = byAnnotationId.get(r.annotationId)
+    if (!item || r.signature === item.signature) return r
+    const tagsAmbiguous =
+      (item.base ? tagsContainSeparator(item.base.tags) : false) ||
+      (item.current ? tagsContainSeparator(item.current.tags) : false)
+    if (tagsAmbiguous) return r
+    if (r.signature !== legacyDiffSignature(item)) return r
+    return { ...r, signature: item.signature }
+  })
+  return pruneReviewedDiffs(migrated, items)
 }
 
 function parseTime(v: unknown): number {

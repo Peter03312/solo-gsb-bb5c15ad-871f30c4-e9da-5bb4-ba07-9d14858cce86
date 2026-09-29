@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto'
 import {
   annotationContentSignature,
   buildSampleQueue,
+  migrateSampleReviews,
   normalizeSampleConfig,
   normalizeSampleReviews,
   normalizeTargets,
@@ -12,6 +13,7 @@ import {
   sha256Hex,
 } from '../src/lib/sampling'
 import type { Annotation, SampleReview } from '../src/types'
+import { legacyContentSignature } from './legacySig'
 
 let passed = 0
 function check(name: string, fn: () => void) {
@@ -352,6 +354,93 @@ check('端到端：多标签部分满足时报告缺口且队列稳定', () => {
   assert.strictEqual(statY.actual, 2)
   assert.strictEqual(statY.gap, 1)
   assert.strictEqual(r1.candidateCount, 4) // pending 不计
+})
+
+// 22. 回归：内容签名区分「单标签含 U+0001」与「两个标签」（旧版二者相同）
+check('内容签名区分含 U+0001 的单标签与两个标签', () => {
+  const SOH = String.fromCharCode(1)
+  const merged = ann([`甲${SOH}乙`], 'a1', { quote: 'q' })
+  const split: Annotation = { ...merged, tags: ['甲', '乙'] }
+  // 旧版签名相同（缺陷复现）
+  assert.strictEqual(legacyContentSignature(merged), legacyContentSignature(split))
+  // 现行签名不同
+  assert.notStrictEqual(annotationContentSignature(merged), annotationContentSignature(split))
+  // 标签内容未变时签名稳定
+  assert.strictEqual(
+    annotationContentSignature(split),
+    annotationContentSignature({ ...split, tags: ['甲', '乙'] }),
+  )
+})
+
+// 23. 回归迁移：旧版结论，标签内容未变（不含 U+0001）→ 改写现行签名，结论保留
+check('migrateSampleReviews 保留标签未变的旧版结论', () => {
+  const a = ann(['甲'], 'a1', { quote: 'q', note: 'n' })
+  const old: SampleReview = {
+    annotationId: 'a1',
+    signature: legacyContentSignature(a),
+    verdict: 'return',
+    note: '复核备注',
+    createdAt: 1,
+    updatedAt: 2,
+  }
+  const out = migrateSampleReviews([old], [a])
+  assert.strictEqual(out.length, 1)
+  assert.strictEqual(out[0].signature, annotationContentSignature(a))
+  assert.strictEqual(out[0].verdict, 'return')
+  assert.strictEqual(out[0].note, '复核备注')
+  assert.deepStrictEqual(migrateSampleReviews(out, [a]), out) // 幂等
+})
+
+// 24. 回归：升级后在会话内把单标签「甲\u0001乙」拆成「甲」「乙」→ 已迁移结论立即失效
+check('标签拆分发生在迁移之后：现行签名不匹配，结论失效回到待复核', () => {
+  const SOH = String.fromCharCode(1)
+  // 旧版落库时为单标签含 U+0001，加载时仍为该状态：旧签名命中 → 迁移为现行签名
+  const merged = ann([`甲${SOH}乙`], 'a1', { quote: 'q' })
+  const old: SampleReview = {
+    annotationId: 'a1',
+    signature: legacyContentSignature(merged),
+    verdict: 'pass',
+    note: '',
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const migrated = migrateSampleReviews([old], [merged])
+  assert.strictEqual(migrated.length, 1)
+  assert.strictEqual(migrated[0].signature, annotationContentSignature(merged))
+  // 用户随后把标签拆成两个：现行签名不同 → prune 清理，抽中项回到待复核
+  const split: Annotation = { ...merged, tags: ['甲', '乙'] }
+  assert.deepStrictEqual(pruneSampleReviews(migrated, [split]), [])
+})
+
+// 25. 回归迁移：内容确已变化（备注不同）且旧签名对不上 → 结论失效
+check('migrateSampleReviews 不复活签名对不上的旧结论', () => {
+  const old = ann(['X'], 'a1', { note: '旧备注' })
+  const now: Annotation = { ...old, note: '新备注' }
+  const review: SampleReview = {
+    annotationId: 'a1',
+    signature: legacyContentSignature(old),
+    verdict: 'pass',
+    note: '',
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  assert.deepStrictEqual(migrateSampleReviews([review], [now]), [])
+})
+
+// 26. 迁移保留的结论与普通结论一样参与后续失效：标签顺序 / 备注变化即清
+check('迁移后结论与现行结论失效口径一致', () => {
+  const a = ann(['X', 'Y'], 'a1', { quote: 'q', note: 'n' })
+  const old: SampleReview = {
+    annotationId: 'a1',
+    signature: legacyContentSignature(a),
+    verdict: 'pass',
+    note: '',
+    createdAt: 1,
+    updatedAt: 1,
+  }
+  const migrated = migrateSampleReviews([old], [a])
+  assert.deepStrictEqual(pruneSampleReviews(migrated, [{ ...a, tags: ['Y', 'X'] }]), [])
+  assert.deepStrictEqual(pruneSampleReviews(migrated, [{ ...a, note: '改' }]), [])
 })
 
 console.log(`\nsampling：${passed} 项断言全部通过`)

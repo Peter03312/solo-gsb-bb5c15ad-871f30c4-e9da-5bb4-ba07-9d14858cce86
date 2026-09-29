@@ -1,5 +1,8 @@
 import assert from 'node:assert'
 import { buildImportDocument, type ImportAnnotationError } from '../src/lib/importDoc'
+import { annotationContentSignature } from '../src/lib/sampling'
+import { diffSnapshot } from '../src/lib/snapshot'
+import { hash53, legacyContentSignature, legacySerializeSnapshot } from './legacySig'
 
 let passed = 0
 function check(name: string, fn: () => void) {
@@ -369,6 +372,124 @@ check('导入后关联记录经既有清洗：忽略 / 关系 / 结论引用缺�
   assert.strictEqual(result.document.relations.length, 1)
   assert.strictEqual(result.document.relations[0].id, 'rel_1')
   assert.strictEqual(result.document.conflictRules[0].id, 'r1')
+})
+
+// ---------- 旧版（U+0001 标签拼接）签名在导入时迁移 ----------
+
+check('导入旧版导出文件：不含 U+0001 的已审记录与复核结论迁移后仍有效', () => {
+  const base = {
+    id: 'a_one',
+    status: 'bound' as const,
+    quote: TEXT.slice(0, 2),
+    note: '',
+    tags: ['甲'],
+    position: { start: 0, end: 2 },
+    context: { before: '', after: '' },
+    createdAt: '2026-09-20T00:00:00.000Z',
+    updatedAt: '2026-09-20T00:00:00.000Z',
+  }
+  // 当前标注相对基线改了备注：构造一个 modified 差异
+  const annotation = { ...base, note: '新备注' }
+  const baseline = {
+    createdAt: '2026-09-19T00:00:00.000Z',
+    annotations: [
+      { id: base.id, status: 'bound', quote: base.quote, note: '', tags: ['甲'], position: { start: 0, end: 2 } },
+    ],
+  }
+  const currentSnap = {
+    id: base.id,
+    status: 'bound' as const,
+    quote: base.quote,
+    note: '新备注',
+    tags: ['甲'],
+    start: 0,
+    end: 2,
+  }
+  const baselineSnap = { ...currentSnap, note: '' }
+  const legacyDiffSig = hash53(
+    `M|${legacySerializeSnapshot(baselineSnap)}|${legacySerializeSnapshot(currentSnap)}`,
+  )
+  const legacyReviewSig = legacyContentSignature(currentSnap)
+  const payload = makePayload({
+    annotations: [annotation],
+    baseline,
+    reviewedDiffs: [
+      { annotationId: 'a_one', signature: legacyDiffSig, createdAt: '2026-09-20T00:00:00.000Z' },
+    ],
+    sampleReviews: [
+      {
+        annotationId: 'a_one',
+        signature: legacyReviewSig,
+        verdict: 'pass',
+        note: '',
+        createdAt: '2026-09-20T00:00:00.000Z',
+        updatedAt: '2026-09-20T00:00:00.000Z',
+      },
+    ],
+  })
+  const result = buildImportDocument(payload)
+  assert.ok(result.ok)
+  if (!result.ok) return
+  const doc = result.document
+  const items = diffSnapshot(doc.baseline, doc.annotations)
+  assert.strictEqual(items.length, 1)
+  assert.strictEqual(doc.reviewedDiffs.length, 1)
+  assert.strictEqual(doc.reviewedDiffs[0].signature, items[0].signature)
+  assert.strictEqual(doc.sampleReviews.length, 1)
+  assert.strictEqual(doc.sampleReviews[0].signature, annotationContentSignature(doc.annotations[0]))
+})
+
+check('导入旧版导出文件：标签含 U+0001 的差异已审记录不迁移，恢复未审', () => {
+  const SOH = String.fromCharCode(1)
+  // 基线为单标签「甲乙」，当前拆成「甲」「乙」；旧版根本不产生该差异，
+  // 文件里即便带有同 ID 旧签名（如改备注时落库），导入后也必须送审
+  const annotation = {
+    id: 'a_one',
+    status: 'bound' as const,
+    quote: TEXT.slice(0, 2),
+    note: '',
+    tags: ['甲', '乙'],
+    position: { start: 0, end: 2 },
+    context: { before: '', after: '' },
+    createdAt: '2026-09-20T00:00:00.000Z',
+    updatedAt: '2026-09-20T00:00:00.000Z',
+  }
+  const baseline = {
+    createdAt: '2026-09-19T00:00:00.000Z',
+    annotations: [
+      {
+        id: 'a_one',
+        status: 'bound' as const,
+        quote: annotation.quote,
+        note: '',
+        tags: [`甲${SOH}乙`],
+        position: { start: 0, end: 2 },
+      },
+    ],
+  }
+  const legacySig = hash53(
+    `M|${legacySerializeSnapshot({
+      id: 'a_one', status: 'bound', quote: annotation.quote, note: '',
+      tags: [`甲${SOH}乙`], start: 0, end: 2,
+    })}|${legacySerializeSnapshot({
+      id: 'a_one', status: 'bound', quote: annotation.quote, note: '',
+      tags: ['甲', '乙'], start: 0, end: 2,
+    })}`,
+  )
+  const payload = makePayload({
+    annotations: [annotation],
+    baseline,
+    reviewedDiffs: [
+      { annotationId: 'a_one', signature: legacySig, createdAt: '2026-09-20T00:00:00.000Z' },
+    ],
+  })
+  const result = buildImportDocument(payload)
+  assert.ok(result.ok)
+  if (!result.ok) return
+  const items = diffSnapshot(result.document.baseline, result.document.annotations)
+  assert.strictEqual(items.length, 1)
+  assert.deepStrictEqual(items[0].changes.map((c) => c.field), ['tags'])
+  assert.deepStrictEqual(result.document.reviewedDiffs, [])
 })
 
 console.log(`\n导入校验：${passed} 项断言全部通过`)
